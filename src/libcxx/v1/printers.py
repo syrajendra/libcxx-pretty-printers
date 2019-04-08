@@ -17,6 +17,7 @@
 
 import re
 import gdb
+import sys
 
 # Try to use the new-style pretty-printing if available.
 _use_gdb_pp = True
@@ -33,6 +34,25 @@ try:
         _use_type_printing = True
 except ImportError:
     pass
+
+# Python 2 + Python 3 compatibility code
+if sys.version_info[0] > 2:
+    ### Python 3 stuff
+    Iterator = object
+
+else:
+    ### Python 2 stuff
+    class Iterator:
+        """Compatibility mixing for iterators
+        Instead of writing next() methods for iterators, write
+        __next__() methods and use this mixin to make them work in
+        Python 2 as well as Python 3.
+        Idea taken from the "six" documentation:
+        <http://pythonhosted.org/six/#six.Iterator>
+        """
+
+        def next(self):
+            return self.__next__()
 
 # Starting with the type ORIG, search for the member type NAME.  This
 # handles searching upward through superclasses.  This is needed to
@@ -66,13 +86,13 @@ class StdStringPrinter:
         if type.code == gdb.TYPE_CODE_REF:
             type = type.target()
 
-        ss = self.val['__r_']['__first_']['__s']
+        ss = self.val['__r_']['__value_']['__s']
         __short_mask = 0x1
         if (ss['__size_'] & __short_mask) == 0:
             len = (ss['__size_'] >> 1)
             ptr = ss['__data_']
         else:
-            sl = self.val['__r_']['__first_']['__l']
+            sl = self.val['__r_']['__value_']['__l']
             len = sl['__size_']
             ptr = sl['__data_']
 
@@ -109,7 +129,7 @@ class UniquePointerPrinter:
         self.val = val
 
     def to_string(self):
-        v = self.val['__ptr_']['__first_']
+        v = self.val['__ptr_']['__value_']
         return '%s<%s> = %s => %s' % (str(self.typename), str(v.type.target()), str(v), v.dereference())
 
 class StdPairPrinter:
@@ -132,7 +152,7 @@ class StdPairPrinter:
 class StdTuplePrinter:
     "Print a std::tuple"
 
-    class _iterator:
+    class _iterator(Iterator):
         def __init__(self, head):
             self.head = head['base_']
             self.fields = self.head.type.fields()
@@ -166,7 +186,7 @@ class StdTuplePrinter:
 class StdListPrinter:
     "Print a std::list"
 
-    class _iterator:
+    class _iterator(Iterator):
         def __init__(self, nodetype, head):
             self.nodetype = nodetype
             self.base = head['__next_']
@@ -190,14 +210,16 @@ class StdListPrinter:
         self.val = val
 
     def children(self):
-        nodetype = find_type(self.val.type, '__node')
-        nodetype = nodetype.strip_typedefs().pointer()
+        nodebase = find_type(self.val.type, '__node_base')
+        nodetype = find_type(nodebase, '__node_pointer')
+        nodetype = nodetype.strip_typedefs()
         return self._iterator(nodetype, self.val['__end_'])
 
     def to_string(self):
+        length = self.val['__size_alloc_']['__value_']
         if self.val['__end_']['__next_'] == self.val['__end_'].address:
             return 'empty %s' % (self.typename)
-        return '%s' % (self.typename)
+        return '%s (length=%d)' % (self.typename,length )
 
 #    def display_hint(self):
 #        return 'array'
@@ -210,12 +232,12 @@ class StdListIteratorPrinter:
         self.typename = typename
 
     def to_string(self):
-        return self.val['__ptr_']['__value_']
+        return self.val['__ptr_'] ['__value_']
 
 class StdForwardListPrinter:
     "Print a std::forward_list"
 
-    class _iterator:
+    class _iterator(Iterator):
         def __init__(self, head):
             self.node = head
             self.count = 0
@@ -235,7 +257,7 @@ class StdForwardListPrinter:
     def __init__(self, typename, val):
         self.val = val
         self.typename = typename
-        self.head = val['__before_begin_']['__first_']['__next_']
+        self.head = val['__before_begin_']['__value_']['__next_']
 
     def children(self):
         return self._iterator(self.head)
@@ -248,7 +270,7 @@ class StdForwardListPrinter:
 class StdVectorPrinter:
     "Print a std::vector"
 
-    class _iterator:
+    class _iterator(Iterator):
         def __init__(self, start, finish_or_size, bits_per_word, bitvec):
             self.bitvec = bitvec
             if bitvec:
@@ -354,7 +376,7 @@ class StdVectorBoolIteratorPrinter:
 class StdDequePrinter:
     "Print a std::deque"
 
-    class _iterator:
+    class _iterator(Iterator):
         def __init__(self, size, block_size, start, map_begin, map_end):
             self.block_size = block_size
             self.count = 0
@@ -398,8 +420,14 @@ class StdDequePrinter:
             return '%s (size=%d)' % (self.typename, int(self.size))
 
     def children(self):
+        if self.size == 0:
+            return []
         block_map = self.val['__map_']
-        return self._iterator(self.size, self.val['__block_size'],
+        size_of_value_type = self.val.type.template_argument(0).sizeof
+        block_size = self.val['__block_size']
+        if block_size.is_optimized_out:
+            block_size = 4096 / size_of_value_type if size_of_value_type < 256 else 16
+        return self._iterator(self.size, block_size,
                               self.val['__start_'], block_map['__begin_'],
                               block_map['__end_'])
 
@@ -467,7 +495,7 @@ class StdSetPrinter:
     "Print a std::set or std::multiset"
 
     # Turn an RbtreeIterator into a pretty-print iterator.
-    class _iterator:
+    class _iterator(Iterator):
         def __init__(self, rbiter):
             self.rbiter = rbiter
             self.count = 0
@@ -483,6 +511,7 @@ class StdSetPrinter:
             item = item.dereference()['__value_']
             result = (('[%d]' % self.count), item)
             self.count += 1
+
             return result
 
     def __init__(self, typename, val):
@@ -506,7 +535,7 @@ class StdSetPrinter:
 class RbtreeIterator:
     def __init__(self, rbtree):
         self.node = rbtree['__begin_node_']
-        self.size = rbtree['__pair3_']['__first_']
+        self.size = rbtree['__pair3_']['__value_']
         self.node_pointer_type = gdb.lookup_type(rbtree.type.strip_typedefs().name + '::__node_pointer')
         self.count = 0
 
@@ -532,10 +561,9 @@ class RbtreeIterator:
             else:
                 parent_node = node.dereference()['__parent_']
                 while node != parent_node.dereference()['__left_']:
-                    node = parent_node
+                    node = parent_node #= node
                     parent_node = parent_node.dereference()['__parent_']
                 node = parent_node
-
             self.node = node
         return result
 
@@ -552,7 +580,7 @@ class StdMapPrinter:
     "Print a std::map or std::multimap"
 
     # Turn an RbtreeIterator into a pretty-print iterator.
-    class _iterator:
+    class _iterator(Iterator):
         def __init__(self, rbiter):
             self.rbiter = rbiter
             self.count = 0
@@ -600,8 +628,8 @@ class StdMapIteratorPrinter:
 
 class HashtableIterator:
     def __init__(self, hashtable):
-        self.node = hashtable['__p1_']['__first_']['__next_']
-        self.size = hashtable['__p2_']['__first_']
+        self.node = hashtable['__p1_']['__value_']['__next_']
+        self.size = hashtable['__p2_']['__value_']
     def __iter__(self):
         return self
 
@@ -649,7 +677,7 @@ class UnorderedSetPrinter:
         self.typename = typename
         self.val = val
         self.hashtable = val['__table_']
-        self.size = self.hashtable['__p2_']['__first_']
+        self.size = self.hashtable['__p2_']['__value_']
         self.hashtableiter = HashtableIterator(self.hashtable)
 
     def hashtable(self):
@@ -676,7 +704,7 @@ class UnorderedMapPrinter:
         self.typename = typename
         self.val = val
         self.hashtable = val['__table_']
-        self.size = self.hashtable['__p2_']['__first_']
+        self.size = self.hashtable['__p2_']['__value_']
         self.hashtableiter = HashtableIterator(self.hashtable)
 
     def hashtable(self):
