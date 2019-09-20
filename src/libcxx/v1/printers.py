@@ -19,6 +19,9 @@ import re
 import gdb
 import sys
 
+# Global variables
+value   = None
+
 # Try to use the new-style pretty-printing if available.
 _use_gdb_pp = True
 try:
@@ -73,6 +76,20 @@ def find_type(orig, name):
             raise ValueError("Cannot find type %s::%s" % (orig, name))
         typ = field.type
 
+# Find the field for libcxx version
+#  libcxx-3.5 and libcxx-3.7 uses __first_ field where as libcxx-5.0 and libcxx-7.0 uses __value_
+def find_field_for_libcxx_version(obj):
+    global value
+    if value:
+        return value
+    else:
+        try:
+            ss = obj['__first_']
+            value = '__first_'
+        except Exception:
+            value = '__value_'
+    return value        
+
 class StdStringPrinter:
     "Print a std::basic_string of some kind"
 
@@ -85,14 +102,14 @@ class StdStringPrinter:
         type = self.val.type
         if type.code == gdb.TYPE_CODE_REF:
             type = type.target()
-
-        ss = self.val['__r_']['__value_']['__s']
+        value = find_field_for_libcxx_version(self.val['__r_'])
+        ss = self.val['__r_'][value]['__s']
         __short_mask = 0x1
         if (ss['__size_'] & __short_mask) == 0:
             len = (ss['__size_'] >> 1)
             ptr = ss['__data_']
         else:
-            sl = self.val['__r_']['__value_']['__l']
+            sl = self.val['__r_'][value]['__l']
             len = sl['__size_']
             ptr = sl['__data_']
 
@@ -129,7 +146,9 @@ class UniquePointerPrinter:
         self.val = val
 
     def to_string(self):
-        v = self.val['__ptr_']['__value_']
+        value = find_field_for_libcxx_version(self.val['__ptr_'])
+        v = self.val['__ptr_'][value]
+
         return '%s<%s> = %s => %s' % (str(self.typename), str(v.type.target()), str(v), v.dereference())
 
 class StdPairPrinter:
@@ -154,7 +173,10 @@ class StdTuplePrinter:
 
     class _iterator(Iterator):
         def __init__(self, head):
-            self.head = head['base_']
+            try:
+                self.head = head['__base_']
+            except Exception:
+                self.head = head['base_']
             self.fields = self.head.type.fields()
             self.count = 0
 
@@ -164,7 +186,10 @@ class StdTuplePrinter:
         def __next__(self):
             if self.count >= len(self.fields):
                 raise StopIteration
-            field = self.head.cast(self.fields[self.count].type)['value']
+            try:
+                field = self.head.cast(self.fields[self.count].type)['value']
+            except:
+                field = self.head.cast(self.fields[self.count].type)['__value_']
             self.count += 1
             return ('[%d]' % (self.count - 1), field)
 
@@ -210,13 +235,13 @@ class StdListPrinter:
         self.val = val
 
     def children(self):
-        nodebase = find_type(self.val.type, '__node_base')
-        nodetype = find_type(nodebase, '__node_pointer')
+        nodetype = find_type(self.val.type, '__node_pointer')
         nodetype = nodetype.strip_typedefs()
         return self._iterator(nodetype, self.val['__end_'])
 
     def to_string(self):
-        length = self.val['__size_alloc_']['__value_']
+        value = find_field_for_libcxx_version(self.val['__size_alloc_'])
+        length = self.val['__size_alloc_'][value]
         if self.val['__end_']['__next_'] == self.val['__end_'].address:
             return 'empty %s' % (self.typename)
         return '%s (length=%d)' % (self.typename,length )
@@ -257,7 +282,8 @@ class StdForwardListPrinter:
     def __init__(self, typename, val):
         self.val = val
         self.typename = typename
-        self.head = val['__before_begin_']['__value_']['__next_']
+        value = find_field_for_libcxx_version(val['__before_begin_'])
+        self.head = val['__before_begin_'][value]['__next_']
 
     def children(self):
         return self._iterator(self.head)
@@ -333,14 +359,17 @@ class StdVectorPrinter:
         start = self.val['__begin_']
         if self.is_bool:
             length = self.val['__size_']
-            capacity = self.val['__cap_alloc_']['__value_'] * self.val['__bits_per_word']
+            value = find_field_for_libcxx_version(self.val['__cap_alloc_'])
+            capacity = self.val['__cap_alloc_'][value] * self.val['__bits_per_word']
+ 
             if length == 0:
                 return 'empty %s<bool> (capacity=%d)' % (self.typename, int(capacity))
             else:
                 return '%s<bool> (length=%d, capacity=%d)' % (self.typename, int(length), int(capacity))
         else:
             finish = self.val['__end_']
-            end = self.val['__end_cap_']['__value_']
+            value = find_field_for_libcxx_version(self.val['__end_cap_'])
+            end = self.val['__end_cap_'][value]
             length = finish - start
             capacity = end - start
             if length == 0:
@@ -411,7 +440,9 @@ class StdDequePrinter:
     def __init__(self, typename, val):
         self.typename = typename
         self.val = val
-        self.size = val['__size_']['__value_']
+        value = find_field_for_libcxx_version(val['__size_'])
+        self.size = val['__size_'][value]
+
 
     def to_string(self):
         if self.size == 0:
@@ -478,7 +509,9 @@ class StdBitsetPrinter:
         bits_per_word = self.val['__bits_per_word']
         word_index = 0
         result = []
-
+        wtype = words.type
+        if wtype.code != gdb.TYPE_CODE_ARRAY:
+            words = [words]
         while word_index < words_count:
             bit_index = 0
             word = words[word_index]
@@ -535,9 +568,11 @@ class StdSetPrinter:
 class RbtreeIterator:
     def __init__(self, rbtree):
         self.node = rbtree['__begin_node_']
-        self.size = rbtree['__pair3_']['__value_']
+        value = find_field_for_libcxx_version(rbtree['__pair3_'])
+        self.size = rbtree['__pair3_'][value]
         self.node_pointer_type = gdb.lookup_type(rbtree.type.strip_typedefs().name + '::__node_pointer')
         self.count = 0
+        self.parent_store = {}
 
     def __iter__(self):
         return self
@@ -551,6 +586,12 @@ class RbtreeIterator:
 
         node = self.node.cast(self.node_pointer_type)
         result = node
+        try:
+            p = node.dereference()['__parent_']
+            self.parent_store[node]= p
+        except Exception:
+            pass
+
         self.count += 1
         if self.count < self.size:
             # Compute the next node.
@@ -561,8 +602,18 @@ class RbtreeIterator:
             else:
                 parent_node = node.dereference()['__parent_']
                 while node != parent_node.dereference()['__left_']:
-                    node = parent_node #= node
-                    parent_node = parent_node.dereference()['__parent_']
+                    node = parent_node 
+                    try:
+                        parent_node = parent_node.dereference()['__parent_']
+                    except Exception:
+                        found = False
+                        for item in self.parent_store:
+                            if parent_node == item:
+                                parent_node = self.parent_store[item]
+                                found = True
+                        if not found:
+                            self.node = node
+                            return result
                 node = parent_node
             self.node = node
         return result
@@ -628,19 +679,25 @@ class StdMapIteratorPrinter:
 
 class HashtableIterator:
     def __init__(self, hashtable):
-        self.node = hashtable['__p1_']['__value_']['__next_']
-        self.size = hashtable['__p2_']['__value_']
+        value = find_field_for_libcxx_version(hashtable['__p1_'])
+        self.node = hashtable['__p1_'][value]['__next_']
+        self.size = hashtable['__p2_'][value]
+
     def __iter__(self):
         return self
 
     def __len__(self):
         return self.size
 
-    def __next__(self):
+    def next(self):
         if self.node == 0:
             raise StopIteration
-        hash_node_type = gdb.lookup_type(
-            self.node.dereference().type.name + '::__node_pointer')
+        try:
+            hash_node_type = gdb.lookup_type(
+                self.node.dereference().type.name + '::__node_pointer')
+        except  Exception:
+            hash_node_type = self.node.type
+
         node = self.node.cast(hash_node_type).dereference()
         self.node = node['__next_']
         value = node['__value_']
@@ -677,7 +734,8 @@ class UnorderedSetPrinter:
         self.typename = typename
         self.val = val
         self.hashtable = val['__table_']
-        self.size = self.hashtable['__p2_']['__value_']
+        value = find_field_for_libcxx_version(self.hashtable['__p2_'])
+        self.size = self.hashtable['__p2_'][value]
         self.hashtableiter = HashtableIterator(self.hashtable)
 
     def hashtable(self):
@@ -704,7 +762,8 @@ class UnorderedMapPrinter:
         self.typename = typename
         self.val = val
         self.hashtable = val['__table_']
-        self.size = self.hashtable['__p2_']['__value_']
+        value = find_field_for_libcxx_version(self.hashtable['__p2_'])
+        self.size = self.hashtable['__p2_'][value]
         self.hashtableiter = HashtableIterator(self.hashtable)
 
     def hashtable(self):
@@ -720,7 +779,11 @@ class UnorderedMapPrinter:
         result = []
         count = 0
         for elt in self.hashtableiter:
-            result.append(('[%d] %s' % (count, str(elt['first'])), elt['second']))
+            try:
+                result.append(('[%d] %s' % (count, str(elt['first'])), elt['second']))
+            except Exception:
+                # This is to support libcxx from llvm7
+                result.append(('[%d] %s' % (count, str(elt['__cc']['first'])), elt['__cc']['second']))
             count += 1
         return result
 
@@ -756,7 +819,7 @@ class Printer(object):
         # A small sanity check.
         # FIXME
         if not self.compiled_rx.match(name + '<>'):
-            raise ValueError('libstdc++ programming error: "%s" does not match' % name)
+            raise ValueError('libcxx programming error: "%s" does not match' % name)
         printer = RxPrinter(name, function)
         self.subprinters.append(printer)
         self.lookup[name] = printer
@@ -900,7 +963,11 @@ def register_libcxx_printers(obj):
     global libcxx_printer
 
     if _use_gdb_pp:
-        gdb.printing.register_pretty_printer(obj, libcxx_printer)
+	    # Handle exception for multiple registration
+        try:
+            gdb.printing.register_pretty_printer(obj, libcxx_printer)
+        except Exception:
+            pass
     else:
         if obj is None:
             obj = gdb
