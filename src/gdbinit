@@ -1,9 +1,9 @@
-define pstr
-  print ((char *)($arg0).c_str())
-end
 python
 import sys
-sys.path.insert(0, '/volume/compiler-images/gdb/libcxx-pretty-printers/src')
+sys.path.insert(0, '/volume/hab/Linux/Ubuntu-12.04/x86_64/gdb/scripts/libcxx-pretty-printers/src')
 from libcxx.v1.printers import register_libcxx_printers
-register_libcxx_printers (None)
+from libstdcxx.v1.gccprinter import register_libstdcxx_printers
+register_libcxx_printers(None)
+register_libstdcxx_printers(None)
 end
+
