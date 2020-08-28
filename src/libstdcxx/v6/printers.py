@@ -880,7 +880,6 @@ class StdStringPrinter:
         self.new_string = typename.find("::__cxx11::basic_string") != -1
 
     def to_string(self):
-        print "Raj inside StdStringPrinter"
         # Make sure &string works, too.
         type = self.val.type
         if type.code == gdb.TYPE_CODE_REF:

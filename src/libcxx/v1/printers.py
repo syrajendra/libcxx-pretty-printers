@@ -985,9 +985,7 @@ def build_libcxx_dictionary():
     # For _GLIBCXX_BEGIN_NAMESPACE_CONTAINER.
     container = '(__cxx2011::' + vers + ')?'
 
-    # libstdc++ objects requiring pretty-printing.
-    # In order from:
-    # http://gcc.gnu.org/onlinedocs/libstdc++/latest-doxygen/a01847.html
+    # libc++ objects requiring pretty-printing.
     libcxx_printer.add_version('std::', 'basic_string', StdStringPrinter)
     libcxx_printer.add_container('std::', 'bitset', StdBitsetPrinter)
     libcxx_printer.add_container('std::', 'deque', StdDequePrinter)
