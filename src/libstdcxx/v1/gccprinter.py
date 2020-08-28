@@ -225,6 +225,8 @@ class StdListPrinter:
             return 'empty %s' % (self.typename)
         return '%s' % (self.typename)
 
+
+
 class StdListIteratorPrinter:
     "Print std::list::iterator"
 
@@ -282,6 +284,7 @@ class StdSlistIteratorPrinter:
         nodetype = find_type(self.val.type, '_Node')
         nodetype = nodetype.strip_typedefs().pointer()
         return self.val['_M_node'].cast(nodetype).dereference()['_M_data']
+
 
 class StdVectorPrinter:
     "Print a std::vector"
@@ -899,7 +902,6 @@ class Tr1UnorderedMapPrinter:
         # Zip the two iterators together.
         return izip (counter, data)
 
-
     def display_hint (self):
         return 'map'
 
@@ -1514,7 +1516,16 @@ def build_libstdcxx_dictionary ():
 
     # Extensions.
     libstdcxx_printer.add_version('__gnu_cxx::', 'slist', StdSlistPrinter)
-
+    
+    #print "Raj allocator"
+    #libstdcxx_printer.add('std::allocator',
+    #                                  StdAllocTraitsPrinter)
+    #print "Raj allocator_traits"
+    #libstdcxx_printer.add('std::allocator_traits',
+    #                                  StdAllocTraitsPrinter)
+    print "Raj __alloc_traits"
+    libstdcxx_printer.add('(__gnu_cxx::__alloc_traits',
+                                      StdAllocTraitsPrinter)
     if True:
         # These shouldn't be necessary, if GDB "print *i" worked.
         # But it often doesn't, so here they are.
@@ -1534,7 +1545,6 @@ def build_libstdcxx_dictionary ():
                                       StdVectorIteratorPrinter)
         libstdcxx_printer.add_version('__gnu_cxx::', '_Slist_iterator',
                                       StdSlistIteratorPrinter)
-
         # Debug (compiled with -D_GLIBCXX_DEBUG) printer
         # registrations.  The Rb_tree debug iterator when unwrapped
         # from the encapsulating __gnu_debug::_Safe_iterator does not

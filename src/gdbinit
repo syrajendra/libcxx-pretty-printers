@@ -2,7 +2,7 @@ python
 import sys
 sys.path.insert(0, '/home/syrajendra/tools/libcxx-pretty-printers/src')
 from libcxx.v1.printers import register_libcxx_printers
-from libstdcxx.v6.printers import register_libstdcxx_printers
+from libstdcxx.v6.gccprinters import register_libstdcxx_printers
 register_libcxx_printers(None)
 register_libstdcxx_printers(None)
 end
